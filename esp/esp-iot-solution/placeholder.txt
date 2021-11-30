@@ -1,0 +1,10 @@
+git clone --recursive  https://github.com/espressif/esp-iot-solution.git 
+
+do it like this:
+
+cd ~/Documents/GitHub/RedClock/esp/
+mv esp-iot-solution/ esp-iot-solutionx/
+git clone --recursive  https://github.com/espressif/esp-iot-solution.git 
+mv esp-iot-solutionx/* esp-iot-solution/
+rmdir esp-iot-solutionx/
+

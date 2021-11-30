@@ -1,0 +1,780 @@
+/* 
+    RedClock Copyright © 2021 Craige Hales
+    All rights reserved.
+
+    This source code is licensed under the BSD-style license found in the
+    LICENSE file in the root directory of this source tree. 
+
+    thanks to many people that posted bits of information!
+
+*/
+﻿
+// wood color
+red=.4;
+green=.3;
+blue=.1;
+edgeBurn = .4; // laser burn (color multiplier) darkens the edge, use 1.0 (no burn) for razor blade cut... and 0.0 for badly burned to black.
+
+// my logical units are inches; just change your mind and they become centimeters or furlongs.
+// (it will be important to communicate the units via the .svg to the laser cutter.)
+cameraDistance = 20; // inches (further away flattens the image's perspective distortion)
+cameraFieldOfView = 35; // degrees (smaller FOV is more magnification, counteracts increasing distance)
+/*
+clear acrylic (the kerf width was updated to .01 inch after I grabbed this...)
+Thick	engrav	part	Feat	Kerf width	MinThk	MaxThk
+0.18 in	0.04in	0.24in	0.04in	0.007874in	0.14in	0.20in
+0.35 in	0.04in	0.24in	0.04in	0.007874in	0.29in	0.39in
+0.22 in	0.04in	0.24in	0.04in	0.007874in	0.19in	0.26in
+0.08 in	0.04in	0.24in	0.04in	0.007874in	0.05in	0.10in
+0.06 in	0.04in	0.24in	0.04in	0.007874in	0.03in	0.08in
+0.12 in	0.04in	0.24in	0.04in	0.007874in	0.09in	0.14in <<<<<<<<
+*/
+
+kerf = .01; // offset by half this much
+
+// box dimensions
+materialThick = .125; // thin material cuts faster
+topBorder = 1.25 * materialThick;
+// REMEMBER the 9x3 dimension needs a little relief for the screw heads and washers
+
+// the circuitboard outline is not quite at 0,0
+CircuitBoardEdges = {0.0029, 0.0029, 8.9029, 2.8529}; // board is 8.9 x 2.85
+// 1.625 is the 1 5/8 inch depth: 1 inch hex spacer, 1/2 inch round, PCB and 2 fiber washers
+Inside = [9.1, 3.02, 1.625]; // x-y-z inside dims. 1,2 is the symmetrical pretty top, 1,3 is the symetrical less pretty side, and 2,3 the asymetrical side
+
+// number of finger-tabs on each dimension
+NumberOfSlots = [16, 5, 3]; // x-y-z notch count--the notches or slots step inward with three complete sides. probably need at least one.
+
+explode = 0 * materialThick; // zero for not exploded -- how much to open the box
+
+xBoardSize = CircuitBoardEdges[3] - CircuitBoardEdges[1];
+yBoardSize = CircuitBoardEdges[4] - CircuitBoardEdges[2];
+/* rev 1
+CircuitBoardHoles = [ // xy centers of 6 mtg holes;
+0.154528	2.68622, // the board hole is .177 inch for #8 screw.
+0.155512	0.169488, // this pattern should be centered on the top/bottom
+8.74902 	0.171457, // face. Below, inside is 9.2 x 3.2
+8.74902 	2.6872, // they are not quite symmetrical/aligned;
+4.46654 	2.53169, // 2.8529 - 2.53169 = 0.32121    the center top/bottom error is .04
+4.47638 	0.363386 // 0.363386 - 0.0029 = 0.360486   inch, match them during assembly!
+];
+*/
+CircuitBoardHoles = [ // rev 2 makes these symmetrical, xy centers of 6 mtg holes;
+0.154953	2.68595,
+0.154953	0.169953,
+8.75095	0.169953,
+8.75095	2.68595,
+4.45295	2.51295,
+4.45295	0.342953
+];
+
+// fix up the hole offset. I'd fix the CircuitBoardEdges too, but they are not needed again.
+CircuitBoardHoles[0,1] -= CircuitBoardEdges[1];
+CircuitBoardHoles[0,2] -= CircuitBoardEdges[2];
+xBoardCorner = (Inside[1] - xBoardSize ) / 2;
+yBoardCorner = (Inside[2] - yBoardSize ) / 2;
+CircuitBoardHoles[0,1] += xBoardCorner;
+CircuitBoardHoles[0,2] += yBoardCorner;
+//CircuitBoardHoles <circle cx="50" cy="50" r="50"/>
+//===================
+
+
+// helper functions for making a simple SVG
+sangle = Sin( pi()/2 );
+cangle = Cos( pi()/2 );
+turnRight = (cangle || -sangle ) |/ (sangle || cangle );
+
+sangle = Sin( -pi()/2 );
+cangle = Cos( -pi()/2 );
+turnLeft = (cangle || -sangle ) |/ (sangle || cangle);
+
+svgWrapAll = function({body}, // add svg wrapper
+	"\[<svg version="1.1" width="31in" height="15in" viewBox="0 0 31 15" xmlns="http://www.w3.org/2000/svg">]\"	// map user units into inches, a 15x15 inch field
+	|| body ||
+	"\[</svg>]\";
+);
+
+svgWrapPath = function({path}, // add path wrapper
+	"\[<path d="]\"
+	|| path ||
+	"\[" stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\"
+);
+
+svgGroupPaths = function({paths},
+	"<g>" || paths || "</g>"
+);
+
+//svgTurnRight = function({}, matsvg = matsvg * turnRight );
+svgTurnLeft = function({}, matsvg = matsvg * turnLeft );
+
+svgMoveAbs = function({x,y},
+	svgpos = (x || y);
+	"M" || char(round(svgpos[1],7)) || " " || char(round(svgpos[2],7)) || "\!n";
+);
+
+svgMoveRel = function({x,y},{xy},
+	xy = (x || y) * matsvg;
+	svgpos += xy;
+	"M" || char(round(svgpos[1],7)) || " " || char(round(svgpos[2],7)) || "\!n";
+);
+
+
+svgDrawRel = function({x,y},{xy},
+	xy = (x || y) * matsvg;
+	svgpos += xy;
+	"L" || char(round(svgpos[1],7)) || " " || char(round(svgpos[2],7)) || "\!n";
+);
+
+// example
+// M x y -- absolute move 
+// m dx dy -- relative
+// L x y -- absolute line
+// l dx dy -- relative
+// H x -- horizontal line
+// h dx -- relative horz line <<<<<<<
+// V y -- vertical line
+// v dy -- relative vert line <<<<<<<
+//
+//
+// this is the format castellate should return
+//
+//path = "\[
+// M 2 2
+// h 1 v .1 h 1 v -.1
+// h 1 v .1 h 1 v -.1
+// h 1 v .1 h 1 v -.1
+// h 1 v .1 h 1 v -.1
+//]\";
+//
+//
+//txt = svgWrapAll(svgWrapPath(path));
+//write(txt);show(length(txt));
+//file=savetextfile("$temp/dummy.svg",txt);
+//open(file);
+
+
+
+
+
+
+
+
+
+
+// castellate: make the castle-like edge _■_■_■_■_■_ The squares are TABs and the underscores SLOTs.
+// the castle is built upside-down, unlike the ascii art above. One edge per call. see rotate at end.
+// decorate the bottom edge by adding top rects in the plane and edge rects on the cut.
+// the top surface will (later) be duplicated to the bottom surface and the edge will
+// connect them to make a 3D volume that looks like a solid panel.
+// The bottom left corner is at x=0,y=0; the finger tabs go slightly(naterialThick) negative below y=0 and
+// the rect for the panel is above y=0. The edge (z dimension) must begin and end where the
+// neighbor edge stops and starts. The edge runs to the right, in the +x dimension.
+
+
+matsvg = [ // 2D transform for SVG to follow the edge
+	1 0,
+	0 1
+];
+
+svgpos = [0 0];
+
+/*
+There are *two* outputs from castellate, the same, but different.
+1) a 3D model in the scene display lists dlistTopSurface and dlistEdge
+2) a 2D drawing in the svgpath
+Both are incomplete; 4 calls are made to castellate to make a wall, and
+each call is making one edge/side of the rectangular wall.
+The 3D model is built down the X axis on each call; at the end of the
+build for the edge a translate is done to move the origin for the next
+wall, and a 90 deg rotate so Y becomes X.
+Curiously, the 2D drawing does not work like that; even though SVG has
+rotate and translate commands I want to avoid them because I *think* the
+Nth edge's rotation will depend on the N-1 edge's rotation and I want to
+be able to separate (and delete) the edges.
+*/
+
+castellate = function( {dlistTopSurface, dlistEdge, dir, thick, beginInsetFromLeft, beginInsetFromBottom}, // call me four times!
+	{x, y, z, i, x0, x1, xstart, nTabs, nSlots, nSteps, TAB=0, SLOT=1, svgpath},
+	x = 0;
+	y = 0;
+	z = 0;
+
+	svgpath = svgMoveAbs(svgpos[1,1],svgpos[1,2]); // path requires start with move, so to current position
+		
+	xStart = if(beginInsetFromLeft,0,thick);
+	nTabs = if(beginInsetFromBottom,NumberOfTabs[dir]-1,NumberOfTabs[dir]);
+	nSlots = if(beginInsetFromBottom,NumberOfTabs[dir],NumberOfTabs[dir]-1);
+	nSteps = nTabs + nSlots;
+	// the beginning state for an edge's Y is opposite for adjacent edges: tabs go in slots
+	yState = if(beginInsetFromBottom, SLOT, TAB); // does edge begin  with tab or slot?
+	
+	dlistEdge << begin( /*QUAD_STRIP*/QUADS );
+
+	for( i = 1, i <= nSteps, i += 1, 
+		// tab or slot, need the run length
+		if( i == 1, // first includes the outer corner
+			x0 = x - xStart;
+			x1 = x + MidStepLength[dir];//
+		, /* else if */ i == nSteps, // last includes the outer corner
+			x0 = x;
+			x1 = x + MidStepLength[dir] + xStart;//
+		, /* else */
+			x0 = x;
+			x1 = x + MidStepLength[dir];
+		);
+		
+//		svgdx = (xstep*matsvg)[1,1] * (x1-x0);
+//		svgdy = (ystep*matsvg)[1,1] * thick;
+		
+		// ping-pong between slots and tabs
+		if( yState == TAB, // tab out. all the y change happens here, not in slot, and the y change is not for a leading/trailing *edge* tab
+			dlistTopSurface << Rect( x0, y, x1, y - thick ); // create the outstep tab's face
+			if( i != 1, // not a start TAB, need leading rise
+				svgpath ||= svgDrawRel(0,-thick);
+				dlistEdge << normal(-1,0,0);
+				dlistEdge << vertex( x0, y, 		0 );
+				dlistEdge << vertex( x0, y, 		-thick );
+				dlistEdge << vertex( x0, y - thick, -thick );
+				dlistEdge << vertex( x0, y - thick, 0 );
+			);
+			if(i==1,
+				svgpath ||= svgDrawRel(x1-x0+kerf/4,0);
+			,/*else if*/i==nSteps,
+				svgpath ||= svgDrawRel(x1-x0+kerf/4,0);
+			,// else
+				svgpath ||= svgDrawRel(x1-x0+kerf/2,0);
+			);
+			dlistEdge << normal(0,-1,0);
+			dlistEdge << vertex( x0, y - thick, 0 );
+			dlistEdge << vertex( x0, y - thick, -thick );
+			dlistEdge << vertex( x1, y - thick, -thick );
+			dlistEdge << vertex( x1, y - thick, 0 );			
+
+			if( i != nSteps, // not an end TAB, need trailing rise
+				svgpath ||= svgDrawRel(0,thick);
+				dlistEdge << normal(1,0,0);
+				dlistEdge << vertex( x1, y - thick, -thick );
+				dlistEdge << vertex( x1, y - thick, 0 );
+				dlistEdge << vertex( x1, y, 		0 );
+				dlistEdge << vertex( x1, y, 		-thick );
+			);
+			x = x1;
+			yState=SLOT; // next time
+		, /* else if */	yState == SLOT, // slot in. no y change, so no special handling for lead/trail slots
+			x = x1;
+			if( i==1,//
+				svgpath ||= svgDrawRel(x1-x0-kerf/4,0);//
+			,/*else if*/ i==nSteps,
+				svgpath ||= svgDrawRel(x1-x0-kerf/4,0);//
+			,// else
+				svgpath ||= svgDrawRel(x1-x0-kerf/2,0);//
+			);
+			dlistEdge << normal(0,-1,0);
+			dlistEdge << vertex( x0, y, 0 );
+			dlistEdge << vertex( x0, y, -thick );
+			dlistEdge << vertex( x1, y, -thick );
+			dlistEdge << vertex( x1, y, 0 );						
+			yState=TAB; // next time
+		, /* else */ throw("ystate="||char(ystate))
+		);	
+	);
+
+	dlistEdge << end();
+
+
+//	x -= (MidStepLength[dir] + xStart); // remove unwanted gap after last outstep
+
+	dlistTopSurface << translate( Inside[dir], 0, 0 );
+	dlistTopSurface << rotate( 90, 0, 0, 1 ); // about the z axis, y is now horz
+	// this can't be inside BEGIN-END...
+	dlistEdge << translate( Inside[dir], 0, 0 );
+	dlistEdge << rotate( 90, 0, 0, 1 ); // about the z axis, y is now horz	
+	// the translate/rotate accumulate; after 4 it is back to start.
+	svgTurnLeft();
+	/*return*/ svgpath;
+);
+
+// for the non-castellated top and bottom, make 4-sided slots AND add the extra border
+makeSlots = function( {dlistTopSurface, dlistEdge, dir, thick, beginInsetFromLeft, beginInsetFromBottom}, // call me four times!
+	{x, y, z, i, x0, x1, xstart, nTabs, nSlots, nSteps, TAB=0, SLOT=1, svgpath, svgpath2},
+	if(beginInsetFromLeft | beginInsetFromBottom,throw("not designed for this side to have slots"));
+	x = 0;
+	y = 0;
+	z = 0;
+	// here the svg is rotated before hand, making it 90 deg phase from model.
+	// it won't matter. But I want the rotate before to get the svgdx and svgdy
+	svgpath = svgMoveAbs(svgpos[1,1],svgpos[1,2]); // path requires start with move, so to current position
+		
+	xStart = if(beginInsetFromLeft,0,thick);
+	nTabs = if(beginInsetFromBottom,NumberOfTabs[dir]-1,NumberOfTabs[dir]);
+	nSlots = if(beginInsetFromBottom,NumberOfTabs[dir],NumberOfTabs[dir]-1);
+	nSteps = nTabs + nSlots;
+	// the beginning state for an edge's Y is opposite for adjacent edges: tabs go in slots
+	yState = if(beginInsetFromBottom, SLOT, TAB); // does edge begin  with tab or slot?
+	
+
+	dlistEdge << begin( /*QUAD_STRIP*/QUADS );
+
+	// the rim corner arc
+	dlistTopSurface << begin( TRIANGLES );
+	ntri=8;
+	for(i=1,i<=ntri,i+=1,
+		angle0 = pi() + pi()/2*(i-1)/ntri;// the arc turns 90 degrees in ntri tiny steps
+		angle1 = pi() + pi()/2*(i  )/ntri;// add pi() to turn through third quadrant
+		x0=topBorder * cos(angle0) - thick;// the topBorder size is also the arc radius
+		y0=topBorder * sin(angle0) - thick;
+		x1=topBorder * cos(angle1) - thick;
+		y1=topBorder * sin(angle1) - thick;
+		svgpath ||= svgDrawRel(x1-x0,y1-y0);
+		// face
+		dlistTopSurface << vertex(-thick,-thick,0);
+		dlistTopSurface << vertex(x0,y0,0);
+		dlistTopSurface << vertex(x1,y1,0);
+		// and the edge...
+		dlistEdge << normal(cos(angle0),sin(angle0),0);
+		dlistEdge << vertex( x0, y0, 		0 );
+		dlistEdge << vertex( x0, y0, 		-thick );
+		dlistEdge << normal(cos(angle1),sin(angle1),0);
+		dlistEdge << vertex( x1, y1, 		-thick );
+		dlistEdge << vertex( x1, y1, 		0 );
+	);
+	dlistTopSurface << end;
+	beginslotpos = svgpos;// after rim circle, before long rim edge, about where the slots belong
+
+	// the rim, beyond the slots
+	svgpath ||= svgDrawRel(Inside[dir]+2*thick,0);
+	dlistTopSurface << Rect( 0-thick, y - thick, Inside[dir]+thick, y - thick - topBorder );
+	dlistEdge << normal(0,-1,0);
+	dlistEdge << vertex( 0-thick, y - topBorder - thick, 		0 );
+	dlistEdge << vertex( 0-thick, y - topBorder - thick, 		-thick );
+	dlistEdge << vertex( Inside[dir]+thick, y - topBorder - thick, -thick );
+	dlistEdge << vertex( Inside[dir]+thick, y - topBorder - thick, 0 );
+
+	savesvgpos = svgpos; // save outer track endpoint before making slots
+	svgpos = beginslotpos; // about where the slots go
+
+// put this in the loop, first time, combined with the first move. Otherwise the initial move adds a ghost border in inkscape.	
+//	svgpath2 = svgMoveRel( -thick - MidStepLength[dir],topBorder);
+	for( i = 1, i <= nSteps, i += 1, 
+		// tab or slot, need the run length
+		if( i == 1, // first includes the outer corner
+			if(yState != TAB,throw("yState error making tabs"));
+			x0 = x - xStart;
+			x1 = x + MidStepLength[dir];//
+		, /* else if */ i == nSteps, // last includes the outer corner
+			x0 = x;
+			x1 = x + MidStepLength[dir] + xStart;//
+		, /* else */
+			x0 = x;
+			x1 = x + MidStepLength[dir];
+		);
+		
+//		svgdx = (xstep*matsvg)[1,1] * (x1-x0);
+//		svgdy = (ystep*matsvg)[1,1] * thick;
+		
+		// ping-pong between slots and tabs
+		if( yState == TAB, // tab out. all the y change happens here, not in slot, and the y change is not for a leading/trailing *edge* tab
+			dlistTopSurface << Rect( x0, y, x1, y - thick );
+			if(i==1,
+				svgpath2 = svgMoveRel( -thick - MidStepLength[dir] + 2*(x1-x0),topBorder);
+			,
+				svgpath2 ||= svgMoveRel(2*(x1-x0),0);
+			);
+			x = x1;
+			yState=SLOT; // next time
+		,// else slot. box it in.
+
+			
+			dlistEdge << normal(0,-1,0);
+			dlistEdge << vertex( x0, y - thick, 0 );
+			dlistEdge << vertex( x0, y - thick, -thick );
+			dlistEdge << vertex( x1, y - thick, -thick );
+			dlistEdge << vertex( x1, y - thick, 0 );			
+			svgpath2 ||= svgDrawRel(x1-x0,0);
+
+			dlistEdge << normal(1,0,0);
+			dlistEdge << vertex( x1, y - thick, -thick );
+			dlistEdge << vertex( x1, y - thick, 0 );
+			dlistEdge << vertex( x1, y, 		0 );
+			dlistEdge << vertex( x1, y, 		-thick );
+			svgpath2 ||= svgDrawRel(0, thick);
+
+			dlistEdge << normal(0,1,0);
+			dlistEdge << vertex( x1, y,         0 );
+			dlistEdge << vertex( x1, y,         -thick );
+			dlistEdge << vertex( x0, y,         -thick );
+			dlistEdge << vertex( x0, y,         0 );			
+			svgpath2 ||= svgDrawRel(x0-x1,0);
+
+			dlistEdge << normal(-1,0,0);
+			dlistEdge << vertex( x0, y - thick, -thick );
+			dlistEdge << vertex( x0, y - thick, 0 );
+			dlistEdge << vertex( x0, y, 		0 );
+			dlistEdge << vertex( x0, y, 		-thick );
+			svgpath2 ||= svgDrawRel(0, -thick);
+
+			x = x1;
+			yState=TAB; // next time
+		);
+
+	);
+	svgpos = savesvgpos; // restore
+
+	// the uncut parts, between the slots
+
+	dlistEdge << end();
+	
+	dlistTopSurface << translate( Inside[dir], 0, 0 );
+	dlistTopSurface << rotate( 90, 0, 0, 1 ); // about the z axis, y is now horz
+	// this can't be inside BEGIN-END...
+	dlistEdge << translate( Inside[dir], 0, 0 );
+	dlistEdge << rotate( 90, 0, 0, 1 ); // about the z axis, y is now horz	
+	// the translate/rotate accumulate; after 4 it is back to start.
+	svgTurnLeft();
+	/*return*/ evallist({svgWrapPath(svgpath),svgWrapPath(svgpath2)});
+);
+
+// these are accumulator lists for the castellations
+makeTopAndEdgeLists = function({j,k},{topsurface,edgesurface,r,g,b},
+	r=if(j==1 & k==2,red,red*1.3);
+	g=if(j==1 & k==3,green,green*1.3);
+	b=if(j==2 & k==3,blue,blue*1.3);
+	topsurface = Scene Display List();
+	topsurface<<color(r,g,b);
+	edgesurface = Scene Display List();
+	edgesurface<<color(r*edgeBurn,g*edgeBurn,b*edgeBurn);
+
+	topSurface<<normal(0,0,1);
+	topSurface << Rect( 0, 0, Inside[j], Inside[k] ); // prepopulated with the center rect
+	/*return*/ evallist({topsurface,edgesurface});
+);
+
+// after accumulation, the top is duplicated and the edge attached
+buildBoard = function({top,edge},{bot},
+	board = Scene Display List();
+	board << calllist( top );
+	board << calllist( edge );
+	board << scale(1,1,-1);// flip normals
+	board << translate( 0, 0, materialThick );
+	board << calllist( top );
+	board << translate( 0, 0, -materialThick );
+	board << scale(1,1,-1);// flip normals
+	/*return*/ board;
+);
+
+build12Cover = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4,i,holes,grommit,backholes}, // the variation of top/bottom
+	{topsurface,edgesurface} = makeTopAndEdgeLists(1,2);
+	svgMoveAbs(1,1);
+	{svg1,svg1slots} = (makeSlots( topsurface, edgesurface, 1, materialThick,0,0 ));
+	{svg2,svg2slots} = (makeSlots( topsurface, edgesurface, 2, materialThick,0,0 ));
+	{svg3,svg3slots} = (makeSlots( topsurface, edgesurface, 1, materialThick,0,0 ));
+	{svg4,svg4slots} = (makeSlots( topsurface, edgesurface, 2, materialThick,0,0 ));
+	//CircuitBoardHoles <circle cx="50" cy="50" r="50"/>
+	holes = "";
+	for(i=1,i<=nrows(CircuitBoardHoles),i+=1,
+		holes = holes || evalinsert("\[<circle 
+		cx="^char(CircuitBoardHoles[i,1]+svgpos[1]+topBorder+materialThick,8)^" 
+		cy="^char(CircuitBoardHoles[i,2]+svgpos[2]+materialThick,8)^" 
+		r="^char(0.177/2,8)^" 
+		stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\");
+	);
+// table-top grommit is on back cover
+	grommit = "";
+	grommit = grommit || evalinsert("\[<circle 
+		cx="^char(svgpos[1]+topBorder+materialThick+Inside[1]/2+0.6,8)^" 
+		cy="^char(svgpos[2]+materialThick+Inside[2]-0.4,8)^" 
+		r="^char(0.39/2,8)^"
+		stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\"); // grommit diameter SPC4882
+// wall mount. two holes on each side of the back face. might be a wire or a loop to go over a pair of wall hooks
+	backholes = "";
+	For Each( {value}, [-0.40, -0.08, 0.08, 0.40], // fraction of total width, from center
+// the wall hooks should be (.32/2 + .08*2 + .32/2 ) = 0.48*width apart: .48*inside[1] == 4.3872 inch ~ 4-3/8 inch
+		backholes = backholes || evalinsert("\[<circle 
+			cx="^char(svgpos[1]+topBorder+materialThick+Inside[1]/2+value*Inside[1],8)^" 
+			cy="^char(svgpos[2]+materialThick+Inside[2]/3,8)^" 
+			r="^char(0.177/2,8)^"
+			stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\"); // grommit diameter SPC4882
+	);
+	oneside = svgGroupPaths( svgGroupPaths(svg1||svg2||svg3||svg4) || svgGroupPaths(svg1slots||svg2slots||svg3slots||svg4slots) || svgGroupPaths(holes) || svgGroupPaths(backholes) || svgGroupPaths(grommit) );
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+build12 = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4}, // the pretty symmetrical side
+	{topsurface,edgesurface} = makeTopAndEdgeLists(1,2);
+	svgMoveAbs(1,1);
+	svg1 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,0,0 ));
+	svg2 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,0 ));
+	svg3 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,0,0 ));
+	svg4 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,0 ));
+	oneside = svgGroupPaths(svg1||svg2||svg3||svg4);
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+build13Ventilated = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4,i,ix,iy,grill,N},// the not-so-pretty symmetrical side
+	{topsurface,edgesurface} = makeTopAndEdgeLists(1,3);
+	svgMoveAbs(1,5);
+	svg1 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,1,1 )); // the inset is symetrical
+	svg2 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,1 )); // but the edges that fill
+	svg3 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,1,1 )); // the inset are asymetrical
+	svg4 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,1 )); // horz vs vert
+	grill = "";
+	N=15;
+	for(i=0,i<N,i+=1,//<rect x="120" width="100" height="100" rx="15" />
+		ix=0.6+i*0.15;
+		iy=0.8*sin(pi()*(i+.5)/(N))^.4;
+		grill = grill || evalinsert("\[<rect 
+		x="^char(ix+svgpos[1],8)^" 
+		y="^char(0.66-iy/2+svgpos[2],8)^" 
+		width=".03"
+		height="^char(iy)^"
+		rx="^char(0.025,8)^" 
+		stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\");
+	);
+	grommit = "";
+// wall-mount grommit in bottom
+	grommit = grommit || evalinsert("\[<circle 
+		cx="^char(0.3+materialThick+Inside[1]/2+svgpos[1],8)^" 
+		cy="^char(0.5+svgpos[2],8)^" 
+		r="^char(0.39/2,8)^"
+		stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\"); // grommit diameter SPC4882
+
+	oneside = svgGroupPaths( svgGroupPaths(svg1||svg2||svg3||svg4) || svgGroupPaths(grill) || svgGroupPaths(grommit) );
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+
+build13 = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4},// the not-so-pretty symmetrical side
+	{topsurface,edgesurface} = makeTopAndEdgeLists(1,3);
+	svgMoveAbs(1,5);
+	svg1 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,1,1 )); // the inset is symetrical
+	svg2 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,1 )); // but the edges that fill
+	svg3 = svgWrapPath(castellate( topsurface, edgesurface, 1, materialThick,1,1 )); // the inset are asymetrical
+	svg4 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,1 )); // horz vs vert
+	oneside = svgGroupPaths(svg1||svg2||svg3||svg4);
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+build23Power = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4,grommit}, // the asymetrical side
+	{topsurface,edgesurface} = makeTopAndEdgeLists(2,3);
+	svgMoveAbs(1,7);
+	svg1 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,1 )); // the inset is not symetrical
+	svg2 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,0 )); // and the edges are
+	svg3 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,1 )); // even worse.
+	svg4 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,0 ));
+	grommit = evalinsert("\[<circle 
+		cx="^char(0.9+materialThick+svgpos[1],8)^" 
+		cy="^char(0.5+svgpos[2],8)^" 
+		r="^char(0.39/2,8)^"
+		stroke="black" fill="transparent" stroke-width=".01" style="fill:none"/>]\"); // grommit diameter SPC4882
+
+	oneside = svgGroupPaths(svgGroupPaths(svg1||svg2||svg3||svg4)||svgGroupPaths(grommit));
+	show(oneside);
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+build23 = function({},{topsurface,edgesurface,svg1,svg2,svg3,svg4}, // the asymetrical side
+	{topsurface,edgesurface} = makeTopAndEdgeLists(2,3);
+	svgMoveAbs(1,7);
+	svg1 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,1 )); // the inset is not symetrical
+	svg2 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,0 )); // and the edges are
+	svg3 = svgWrapPath(castellate( topsurface, edgesurface, 2, materialThick,0,1 )); // even worse.
+	svg4 = svgWrapPath(castellate( topsurface, edgesurface, 3, materialThick,1,0 ));
+	oneside = svgGroupPaths(svg1||svg2||svg3||svg4);
+	/*return*/ evallist({buildboard(topsurface,edgesurface), oneside});
+);
+
+all = Scene Display List();
+
+rebuild = function({},{top,left,front,wall,i},
+
+	global:NumberOfTabs = NumberOfSlots + 1;// the joining face is the same, but changes tabs to slots.
+	global:MidStepLength = inside :/ (NumberOfSlots + NumberOfTabs); // all three dims are the same, mostly.
+
+//	{top,topsvg} = build12();
+//	{left,leftsvg} = build13();
+//	{front,frontsvg} = build23();
+	{top,topsvg} = build12Cover(); // similar to build12, an alternate version
+	{left,leftsvg} = build13Ventilated();
+	{front,frontsvg} = build23Power();
+	
+	
+	
+//	// make a cap-ring too (not using this anymore)
+//	// inner
+//	cappathInner = svgMoveAbs(1+materialThick*1.5, 1+materialThick*1.5);
+//	cappathInner = cappathInner || svgDrawRel(Inside[1],0);
+//	cappathInner = cappathInner || svgDrawRel(0,Inside[2]);
+//	cappathInner = cappathInner || svgDrawRel(-Inside[1],0);
+//	cappathInner = cappathInner || svgDrawRel(0,-Inside[2]);
+//	cappathInner = svgWrapPath(cappathInner);
+//	// outer
+//	cappathOuter = svgMoveAbs(1,1);
+//	cappathOuter = cappathOuter || svgDrawRel(Inside[1]+2*(materialThick*1.5),0);
+//	cappathOuter = cappathOuter || svgDrawRel(0,Inside[2]+2*(materialThick*1.5));
+//	cappathOuter = cappathOuter || svgDrawRel(-(Inside[1]+2*(materialThick*1.5)),0);
+//	cappathOuter = cappathOuter || svgDrawRel(0,-(Inside[2]+2*(materialThick*1.5)));
+//	cappathOuter = svgWrapPath(cappathOuter);
+//	cap = svgGroupPaths(cappathInner||cappathOuter);
+	
+	show(savetextfile("f:/box.svg",svgWrapAll(topsvg||leftsvg||frontsvg/*||cap*/)));
+	all<<clear();
+
+	all << translate( -Inside[1]/2, -Inside[2]/2, -Inside[3]/2 );
+
+	all<<translate(materialThick,materialThick,materialThick);
+	all << color( 1, 1, 1 );
+	all << sphere( materialThick, 8, 8 ); // represents the light
+	all<<translate(-materialThick,-materialThick,-materialThick);
+
+	wall = -explode;
+	for(i=1,i<=2,i++,
+		all<<translate(0,0,wall);
+		all<<calllist(top);
+		all<<translate(0,0,-wall);
+		wall+=(Inside[3] + materialThick + 2*explode);
+	);
+
+	all<<rotate(90,1,0,0);
+	all<<translate(0,0,materialThick);
+	wall = -explode;
+	for(i=1,i<=2,i++,
+		all<<translate(0,0,-wall);
+		all<<calllist(left);
+		all<<translate(0,0,wall);
+		wall+=(Inside[2] + materialThick + 2*explode);
+	);
+	all<<translate(0,0,-materialThick);
+	all<<rotate(-90,1,0,0);
+
+	all<<rotate(90,0,1,0);
+	all<<rotate(90,0,0,1);
+	wall = -explode;
+	for(i=1,i<=2,i++,
+		all<<translate(0,0,wall);
+		all<<calllist(front);
+		all<<translate(0,0,-wall);
+		wall+=(Inside[1] + materialThick + 2*explode);
+	);
+	all<<rotate(-90,0,0,1);
+	all<<rotate(-90,0,1,0);
+);
+
+rebuild();
+
+scene = Scene Box( 1600, 1000 );
+scene<<backgroundcolor(100,100,100);// out of 0..255 -- a medium dark gray
+scene<<show arc ball("always");
+
+scene << Enable( "Lighting" );
+scene << Light( Light0, Position, -10, 10, 30, 0 );
+scene << Light( Light1, Position, -10, -10, 30, 0 );
+scene << Light( Light2, Position, 10, -10, 30, 0 );
+scene << Light( Light2, Position, 10, 10, 30, 0 );
+scene << Enable( "COLOR_MATERIAL" );
+
+//scene << LightModel( LIGHT_MODEL_TWO_SIDE, 0 );
+
+LightAmbient1 = 0;
+LightAmbient2 = 0;
+LightAmbient3 = 0;
+LightAmbient4 = 1;
+LightDiffuse1 = 1;
+LightDiffuse2 = 1;
+LightDiffuse3 = 1;
+LightDiffuse4 = 1;
+LightSpecular1 = 1;
+LightSpecular2 = 1;
+LightSpecular3 = 1;
+LightSpecular4 = 1;
+LightModelAmbient1 = .2;
+LightModelAmbient2 = .2;
+LightModelAmbient3 = .2;
+LightModelAmbient4 = 1;
+
+lights={"Light0","Light1","Light2","Light3"};
+lightscale=.5;
+for(ilight=1,ilight<=nitems(lights),ilight+=1,
+	scene << Enable( lights[ilight] );
+	scene << Light(
+		lights[ilight],
+		"AMBIENT",
+		LightAmbient1*lightscale,//*(ilight==1|ilight==2),
+		LightAmbient2*lightscale,//*(ilight==2|ilight==3),
+		LightAmbient3*lightscale,//*(ilight==3|ilight==4),
+		LightAmbient4
+	);
+	scene << Light(
+		lights[ilight],
+		"DIFFUSE",
+		LightDiffuse1*lightscale,//*(ilight==1|ilight==2),
+		LightDiffuse2*lightscale,//*(ilight==2|ilight==3),
+		LightDiffuse3*lightscale,//*(ilight==3|ilight==4),
+		LightDiffuse4
+	);
+	scene << Light(
+		lights[ilight],
+		"SPECULAR",
+		LightSpecular1*lightscale,//*(ilight==1|ilight==2),
+		LightSpecular2*lightscale,//*(ilight==2|ilight==3),
+		LightSpecular3*lightscale,//*(ilight==3|ilight==4),
+		LightSpecular4
+	);	
+);
+	
+	
+	scene << LightModel(
+		"LIGHT_MODEL_AMBIENT",
+		LightModelAmbient1,
+		LightModelAmbient2,
+		LightModelAmbient3,
+		LightModelAmbient4
+	);
+	
+scene << Material( "Front", "Shininess", 1 );
+//scene  << Enable( Auto_Normal );
+//scene << ShadeModel( flat );
+//scene << ShadeModel( smooth );
+		
+scene << perspective( cameraFieldOfView, 5, 50 );
+scene << Translate( 0.0, 0.0, -cameraDistance );
+
+rotationList = Scene Display List();
+rotationList << rotate(0,0,0,0);
+scene<<calllist(rotationList);
+
+scene << ArcBall( all, Sqrt( Inside[1] ^ 2 + Inside[2] ^ 2  + Inside[3] ^ 2 ) / 2 );
+
+New Window( "x", hlistbox(vlistbox(
+	hlistbox(textbox("red"),numbereditbox(red,<<setfunction(function({this},red =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("green"),numbereditbox(green,<<setfunction(function({this},green =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("blue"),numbereditbox(blue,<<setfunction(function({this},blue =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("edgeburn"),numbereditbox(edgeburn,<<setfunction(function({this},edgeburn =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("kerf"),numbereditbox(kerf,<<setfunction(function({this},kerf =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("X len"),numbereditbox(Inside[1],<<setfunction(function({this},Inside[1] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("Y len"),numbereditbox(Inside[2],<<setfunction(function({this},Inside[2] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("Z len"),numbereditbox(Inside[3],<<setfunction(function({this},Inside[3] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("X tabs"),numbereditbox(NumberOfSlots[1],<<setfunction(function({this},NumberOfSlots[1] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("Y tabs"),numbereditbox(NumberOfSlots[2],<<setfunction(function({this},NumberOfSlots[2] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("Z tabs"),numbereditbox(NumberOfSlots[3],<<setfunction(function({this},NumberOfSlots[3] =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("materialThick"),numbereditbox(materialThick,<<setfunction(function({this},materialThick =this<<get;rebuild();scene<<reshow;)))),
+	hlistbox(textbox("explode"),numbereditbox(explode,<<setfunction(function({this},explode =this<<get;rebuild();scene<<reshow;)))),
+),scene) );
+
+if( 0, // make video
+	dir="f:/boxvideo/pics/";
+	deletedirectory(dir);
+	imagedir=createdirectory(dir);
+	scene << show arc ball( "never" );
+	for( angle = 0, angle <= 2 * 360, angle += 1,
+		explode = Max( 0, (1.0 - angle / 360) * 1 );
+		rebuild();
+		rotationList << clear;
+		rotationList << rotate( 2 * angle, 1, 1, 1 );
+		scene << update<<updatewindow;
+		Wait( 0 );
+		img = newimage(((scene<<getpicture)<<getpixels)[1::(scene<<getheight),1::(scene<<getwidth)]);
+		img<<saveimage(dir||"box"||char(1e6+angle)||".png","png");
+	);
+);
+
+open("f:/box.svg")

@@ -1,0 +1,694 @@
+/* 
+    RedClock Copyright © 2021 Craige Hales
+    All rights reserved.
+
+    This source code is licensed under the BSD-style license found in the
+    LICENSE file in the root directory of this source tree. 
+
+    thanks to many people that posted bits of information!
+
+*/
+
+// the reason to run it twice: the second run will have the
+// polygons drawn to the bitmap such that the smallest are drawn last
+// so they don't get overwritten. Probably makes no real difference.
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+Problem one: A GPS device returns both the lat,lon location and the 
+UTC time. How can you get the local time from that information?
+
+You can't. You also need to know what timezone boundary the lat,lon
+falls in. There's a nice github project, updated frequently, with
+changes. 
+https://github.com/evansiroky/timezone-boundary-builder
+
+There's also one or more web sites like 
+https://timezonedb.com that provide an API to some database similar
+to the boundaries.
+
+Problem two: Build a clock using an ESP32 and a GPS. How can it get the
+timezone? It only has about 2MB of memory and it can only access the
+internet if it has wifi access and a password.
+
+Since a clock should "just work", the internet can be the primary
+answer, used if available. A fallback answer is needed too; the data 
+for the timezones needs to be compressed into a structure that is 
+small, sufficiently detailed, and reasonably fast. (I probably will
+not use the website because I'd have to bake in my API-key...)
+
+Timezones are identified by IANA with names like America/New_York
+(no longer Eastern Standard Time, EDT, DST for daylight saving time, etc
+because "lots of places have an east.") America/New_York implies
+when the time changes happen, but it requires another table to
+get those rules. The names change, sometimes, as do the rules.
+America/Godthab changed its name to America/Nuuk in 2020, and
+everyone has experienced their local leaders playing with "summer time".
+https://data.iana.org/time-zones/tzdb/NEWS
+
+Linux systems have another way to represent timezones, using a rule 
+rather than a name. (Going out on a limb here...) a Linux system has
+tables for converting names to rules. A tiny ESP32 system only
+understands the rules. A rule looks something like
+<-03>3<-02>,M3.5.0/-2,M10.5.0/-1 (for America/Nuuk) 
+or
+EST5EDT,M3.2.0,M11.1.0 (for America/New_York)
+I think those are called "posix" rules. EST5 means 5 hours behind
+UTC, the EDT means daylight time is observed in the summer. The two
+time-like values says when to start and end daylight time using, for
+the New York example, third month, second week, sunday with a 2AM default.
+Nuuk is 3 or 2 hours behind and uses the last(5) week and 1AM (or
+is that 11PM?) Fortunately, we don't need to read or write the rules, the OS does.
+
+The name-based America/New_York and the rule-based EST5EDT,M3.2.0,M11.1.0
+provide different benefits for different use cases. The name-based system
+uses a database to look up the name and can provide historical information
+about whether daylight time was in effect in May of 1970, for example.
+The rule-based system needs no database and encodes everything needed
+to convert any time the rule covers (maybe not 1970!) between UTC and local.
+
+In this project, I realized a bit late that I needed the rule-based answer;
+had the name-based answers been converted to rule-based earlier, collapsing
+adjacent names with the same rule into one area instead of several, the
+file would be a bit smaller. But, it is small enough.
+
+This is the JSL to build the timezone data structure that is stored
+into the ESP32 flash memory (4MB which also holds the C code.) The
+C language code on the ESP32 will use the resulting binary data.
+*/
+
+// data from https://github.com/evansiroky/timezone-boundary-builder
+// https://github.com/evansiroky/timezone-boundary-builder/releases/download/2020d/timezones.geojson.zip
+
+// https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv to convert America/New_York to EST5EDT,M3.2.0,M11.1.0
+// https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+// made my own using the gen-tz.py script, modified with freqCodeToName names added, America/Nuuk was missing
+/* here's the import of the file that converts from America/New_York to EST5EDT,M3.2.0,M11.1.0
+   I open the JMP table with the from and to column names below...
+
+dtTrans = open("f:/ClockScripts/gen-tz.csv",Import Settings(
+		End Of Line( CRLF, CR, LF ),
+		End Of Field( Comma, CSV( 1 ) ),
+		Strip Quotes( 1 ),
+		Use Apostrophe as Quotation Mark( 0 ),
+		Use Regional Settings( 0 ),
+		Scan Whole File( 1 ),
+		Treat empty columns as numeric( 0 ),
+		CompressNumericColumns( 0 ),
+		CompressCharacterColumns( 0 ),
+		CompressAllowListCheck( 0 ),
+		Labels( 0 ),
+		Column Names Start( 1 ),
+		Data Starts( 1 ),
+		Lines To Read( "All" ),
+		Year Rule( "20xx" )
+	));*/
+
+//dtTrans = open("$desktop/timezoneNameConversion.jmp"); // cols from and to, used way below to make an associative array
+/* this file was missing Nuuk, above was the regenerated file including Nuuk (run Python on Linux system on the gen-tz) */
+dtTrans = open("https://raw.githubusercontent.com/nayarsystems/posix_tz_db/master/zones.csv",Import Settings(
+		End Of Line( CRLF, CR, LF ),
+		End Of Field( Comma, CSV( 1 ) ),
+		Strip Quotes( 1 ),
+		Use Apostrophe as Quotation Mark( 0 ),
+		Use Regional Settings( 0 ),
+		Scan Whole File( 1 ),
+		Treat empty columns as numeric( 0 ),
+		CompressNumericColumns( 0 ),
+		CompressCharacterColumns( 0 ),
+		CompressAllowListCheck( 0 ),
+		Labels( 0 ),
+		Column Names Start( 1 ),
+		Data Starts( 1 ),
+		Lines To Read( "All" ),
+		Year Rule( "20xx" )
+	));
+/* */
+
+if( 0, // about 2 minutes...run once... download from https://github.com/evansiroky/timezone-boundary-builder/releases/download/2020d/timezones.geojson.zip
+	//za = Open( "z:/timezones.geojson.zip", "zip" );
+	za = Open("https://github.com/evansiroky/timezone-boundary-builder/releases/download/2020d/timezones.geojson.zip", "zip" );
+	blob = za << read( "combined.json", Format( blob ) );
+	p = Parse JSON( Blob To Char( blob ) ); // this grinds for a bit, it is 135MB
+	Save Text File( "$desktop/rlejson.jsl", char(p) ); // this is what is needed next time
+);
+/* run the above to generate this file the first time */
+P = Eval( Parse( Load Text File( "$desktop/rlejson.jsl" ) ) ); // loads faster this way
+/*
+this is the only interesting key, grab it once. probably this is what should have been saved/reloaded. 
+WATER: there is another version of the geojson that includes oceans. I did not look at it. The
+JSL presets the bitmap to 0, then fills in polygons with values > 0 for timezones. This works out 
+well; the C array is indexed from 0 and has a entry for water there. The JSL test code detects 
+the 0 to avoid an index error and reports "water";
+*/
+featureList = P["features"]; // list of 426 AAs (no water)
+/*
+the "P" is for Parsed json. This is the best way to load this .json
+data; using the json wizard almost works but does not handle the nested
+arrays used to represent disjoint polygons.
+
+The next two files are saved from a prev run. find "if(0, // regenerate" below
+to generate them; takes a while and this saves time if nothing else changed.
+If you are lucky enough to only run this code once, you won't care. Saved a lot
+of development time further down in the file.
+*/
+rle = Eval( Parse( Load Text File( "$desktop/rletext.jsl" ) ) );
+/*
+you won't have this file the first time; I think freqCodeToName={"water"}; is the correct choice,
+BUT you'll need to do a second run to get good compression! This list *should* have the
+"America/New_York" names listed in order of how many times they create a run in the 
+run length encoding. The 128 most frequent ones get represented as 1-byte codes, the
+remaining 300 or so get a 2-byte code. They get counted and saved in this file later.
+*/
+freqCodeToName = Eval( Parse( Load Text File( "$desktop/rlename.jsl" ) ) );
+/*
+Mostly this JSL uses the "America/New_York" names, in the order of the feature list.
+This simple-minded list of those names can be indexed by the feature index (usually) or
+using loc() (rarely) to get the index from the name.
+The for loop ignores the geometry for now and make the iFeatureToName list.
+*/
+iFeatureToName = {};
+for( global:iFeature = 1, global:iFeature <= N Items( featureList ), global:iFeature += 1,
+	tzdata = featureList[global:iFeature]; // aa {"geometry", "properties", "type"}
+	tzproperties = tzdata["properties"]; // aa ["tzid" => "Africa/Abidjan"]
+	tzname=tzproperties["tzid"];
+	insertinto(iFeatureToName,tzname);
+	if(!contains(freqCodeToName,tzname),
+		write("\!nadd ",tzname);
+		insertinto(freqCodeToName, tzname); // see comment above about "freqCodeToName={"water"};" -- this makes the uncompressed version
+	);
+);
+
+// sanity check, will need work or removal in the future.
+if( freqCodeToName[1] != "water" | freqCodeToName[2] != "Asia/Shanghai" | freqCodeToName[426] != "Europe/Busingen" | freqCodeToName[427] != "Europe/Vatican",
+	Throw( "freqCodeToName" ) // probably comment this out on the first run which won't be sorted, and maybe later if the world changes.
+);
+
+/*
+two helper functions for the graphics script to call
+doploy does one disjoint part of a timezone.
+Further down, the graphbox will be recreated over and over for each global:iFeature because
+there is an anti-aliased edge that has pixels of a different color than the center pixels
+but they are all the same timezone...so doing the timezones one-at-a-time is the easiest way,
+though it will take a long time because the bitmap is 16K x 30K huge.
+*/
+dopoly = function( {tzName, tzcoords},
+	{i, m, xs,ys},
+	for( i = 1, i <= N Items( tzcoords ), i += 1, 
+		/*
+		I'm still not sure what the 2,3,... polys represent. Holes maybe, 
+		in a single disjoint poly. Render same color, smaller polys render later (2nd run).
+		
+		this is part of the data that is not right with the json wizard (comments at top)
+		*/
+		//if(i>1,fillcolor("magenta")); 
+		m = Matrix( tzcoords[i] );
+		xs = m[0, 1];
+		ys = m[0, 2];
+		//pencolor("white");pensize(1);
+		polygon/*line*/(xs, ys);// xmatrix,ymatrix
+	)
+);
+
+/*
+drawpolys does all the disjoint parts of one timezone; a timezone with only 1 part is not nested
+quite as deep as a timezone with multiple disjoint parts.
+*/
+drawpolys = function( {}, // 
+	{tzdata, tzgeometry, tzproperties, tztype, tzGeometryType, tzcoordinates, code, greenbits, bluebits, redbits, ipoly},
+	tzdata = featureList[global:iFeature]; // aa {"geometry", "properties", "type"}
+	tzgeometry = tzdata["geometry"]; // aa {"coordinates", "type"}
+	tzproperties = tzdata["properties"]; // aa ["tzid" => "Africa/Abidjan"]
+	/* sanity checking, these should match the log line that follows from the driver loop below */
+	write("\!n drawing ",global:iFeature,": ", tzproperties["tzid"] );
+	tztype = tzdata["type"]; // string "Feature"
+	tzGeometryType = tzgeometry["type"];//"Polygon" or "MultiPolygon"
+	tzcoordinates = tzgeometry["coordinates"]; // list
+	Fill Color( "white" );
+	if(
+		tzGeometryType == "MultiPolygon", /* a disjoint time zone */
+			for( ipoly = 1, ipoly <= N Items( tzcoordinates ), ipoly += 1,
+				dopoly( tzproperties["tzid"], tzcoordinates[ipoly] ) /* deeper nest */
+			);//
+	, /*else if*/tzGeometryType == "Polygon", /* single poly timezone */
+			dopoly( tzproperties["tzid"], tzcoordinates );// no extra nest
+	, /*else*/
+		Throw( "tzGeometryType" || Char( tzGeometryType ) )
+	);
+);
+/*
+this needs to run the first time to generate the bitmap to get the initial frequencies of the
+run length codes. It needs to run the 2nd time too, using the frequency ordering. Maybe.
+Originally 1-pixel zones like Europe/Vatican reported their name. Now they report thier
+description, and in this case, the surrounding Europe/Rome has the same description. There
+could be some other edge cases that still matter.
+"composition" is a large matrix (3.5GB), if rerunning this code, set it to 0 to release the
+old one before making a new one. otherwise 2*3.5GB must be in memory at the same time.
+*/
+composition = 0;
+composition = J( 16000, 30000, 0 );42;
+if(0, // let this code run to rebuild the composition
+	for( ifreq = 2/* 1 is water */, ifreq <= N Items( freqCodeToName ), ifreq += 1,
+		/*
+		this is the big-to-small list of timezones; get the name of the zone to do next...
+		*/
+		thisname=freqCodeToName[ifreq];
+		/*
+		this global variable tells the poly routine what to work on; locate the name and use the index from loc
+		*/
+		global:iFeature = loc(iFeatureToName,thisname)[1];// draw smallest last
+		/*
+		Surprisingly nothing happens when the graphbox is made without a window, until...
+		*/
+		gb = Graph Box(
+			X Scale( -180, 180 ),
+			Y Scale( -90, 90 ),
+			framesize( 30000 + 1, 16000 + 1 ), // drawing beyond 30,000 may not always work, 16x30 is about as big as it can be.
+			<<backgroundcolor( "black" ),
+			drawpolys();
+			//marker(colorstate("green"),{-180,-90},{180,-90},{-180,90},{180,90},{0,0}); // corner markers might help figure out trimming, below
+		);
+		/*
+		...the picture/bitmap is requested. That takes some time.
+		*/
+		pixels = gb[framebox( 1 )] << getpicture; // 30 seconds to make the picture
+		gb = 0;
+		pixels = pixels << getpixels; // 10 seconds to convert to pixel matrix
+		/*
+		trimming the image. added 1 in the graphbox to get the data inside a 30000x16000 
+		(not 29999x15999) space, now strip off the extra frame pixels
+		*/
+		pixels = pixels[2 :: (N Rows( pixels ) - 5), 2 :: (N Cols( pixels ) - 5)];
+		/*
+		after another small sanity check, find the nonzero (rendered white timezone on black background)
+		pixels and add them to the composition as *** global:iFeature *** value.
+		iFeature will become the RLE code in the next step.
+		*/
+		if( N Rows( composition ) == N Rows( pixels ) & N Cols( composition ) == N Cols( pixels ),
+			composition[Loc( pixels )] = global:iFeature; // 
+		, // else
+			Throw( "composition" )
+		);
+		write("\!n freq=", ifreq," composition code=",global:iFeature," for ",thisname );
+		if(thisname == "America/New_York", write(" ***"));
+		Wait( .1 );
+	);
+	/*
+	delete the old file saving the composition, then recreate it.
+	My computer was unable to do it in one save, so I split it 
+	into four appends. Probably no real point in the delete since
+	the first save is a replace.
+	And this hardcodes the 16000 height, but that isn't the dimension
+	I wish was bigger; the horizontal resolution is more important for
+	timezones, most of the time.
+	*/
+	try(deletefile("$desktop/rlecomp.jsl"));
+
+	bcomp = matrixtoblob(composition[1::4000,0],"float",8,"little");
+	file=Save Text File( "$desktop/rlecomp.jsl", bcomp, mode("replace") );
+	show(filesize(file));
+	bcomp = matrixtoblob(composition[4001::8000,0],"float",8,"little");
+	file=Save Text File( "$desktop/rlecomp.jsl", bcomp, mode("append") );
+	show(filesize(file));
+	bcomp = matrixtoblob(composition[8001::12000,0],"float",8,"little");
+	file=Save Text File( "$desktop/rlecomp.jsl", bcomp, mode("append") );
+	show(filesize(file));
+	bcomp = matrixtoblob(composition[12001::16000,0],"float",8,"little");
+	file=Save Text File( "$desktop/rlecomp.jsl", bcomp, mode("append") );
+	show(filesize(file));
+);
+/*
+reload the composition created above
+*/
+composition = 0;
+composition = J( 16000, 30000, 0 );
+composition[1::4000,0] = blobtomatrix(loadtextfile("$desktop/rlecomp.jsl",blob(readOffsetFromBegin(0),readlength(960000000))),"float",8,"little",30000);
+composition[4001::8000,0] = blobtomatrix(loadtextfile("$desktop/rlecomp.jsl",blob(readOffsetFromBegin(1*960000000),readlength(960000000))),"float",8,"little",30000);
+composition[8001::12000,0] = blobtomatrix(loadtextfile("$desktop/rlecomp.jsl",blob(readOffsetFromBegin(2*960000000),readlength(960000000))),"float",8,"little",30000);
+composition[12001::16000,0] = blobtomatrix(loadtextfile("$desktop/rlecomp.jsl",blob(readOffsetFromBegin(3*960000000),readlength(960000000))),"float",8,"little",30000);
+42;
+/*
+view it for another sanity check
+*/
+img = 0;
+img = New Image( Heat Color( composition / Max( composition ), "spectral" ) );
+img << scale( 1 / 16 ); // make it fit screen better. maybe use 1/8 on a 4K display.
+New Window( "x", img );
+
+/*
+This JSL mostly builds the RLE (run length encoded data), but as a side effect
+counts how common the RLE codes are. 
+This loop builds uncompressed pairs {code,length} in a list of Nx2-element matrices
+rle is a 16000 element list; each element is a run length encoded row of the picture.
+each row of rle is a Nx2 matrix of the rle encoded changes for the row.
+*/
+if(0, // regenerate
+	codecounts = [=>0];
+	rle = {};
+	for( irow = 1, irow <= N Rows( composition ), irow += 1,
+		if(mod(irow,100)==0,write(irow," ");wait(.01));
+		row = {}; // a list for one row
+		code = -1; // initial no match
+		length = 0; // initial no length
+		for( icol = 1, icol <= N Cols( composition ), icol += 1,
+			if( composition[irow, icol] != code, // new run begins
+				if( length > 0, // initial no match has length 0
+					run = {}; // output code&length of prev run
+					codecounts[code]+=1;
+					run[1] = code;
+					run[2] = length;
+					row[N Items( row ) + 1] = run;
+				);
+				length = 1;
+				code = composition[irow, icol];//
+			, // else
+				length += 1
+			)
+		);
+		run = {};// handle the last one on the row
+		codecounts[code]+=1;
+		run[1] = code;
+		run[2] = length;
+		row[N Items( row ) + 1] = run;
+		rle[N Items( rle ) + 1] = Matrix( row );// convert to Nx2 matrix and store at end of rle list
+	);
+
+	countkeys = codecounts<<getkeys; // 0..426. these are iFeature values.
+	countvals = codecounts<<getvalues; // {108243, 849, 653, 1253, ... }
+	rnk = rank(countvals);
+	countvals = reverse(countvals[rnk]);
+	countkeys = reverse(countkeys[rnk]); // these are iFeatures in big to small order
+	if(countkeys[1]!=0,throw("countkeys"));
+	freqCodeToName = iFeatureToName[countkeys[2::nitems(countkeys)]];
+	insertinto(freqCodeToName,"water",1); // 427
+	/*
+	save for another run if nothing above changed
+	*/
+	Save Text File( "$desktop/rletext.jsl", Char( rle ) );
+	Save Text File( "$desktop/rlename.jsl", char(freqCodeToName) );
+);
+/*
+really close to building the binary data now. this converts the rle list of matrices
+into a matrix directory of offsets into a blob, and the blob of compressed code,length
+pairs. The compression for code and length is the same for both, 1 or 2 bytes depending
+on size of number. partBlob speeds the build up by reducing the number of small appends
+to a really huge blob.
+*/
+RleTableIndex = J( N Items( rle ), 1, . );
+RleTableDataBlob = Char To Blob( "" );
+address = 0; // increments according to compression and writes to RleTableIndex
+irun = 0;
+partBlob = Char To Blob( "" );
+for( i = 1, i <= N Items( rle ), i += 1,
+	if(mod(i,100)==0,write(i," ");wait(0););
+	RleTableIndex[i] = address;
+	k = 0;
+	for( j = 1, j <= N Items( rle[i] ) / 2, j += 1,
+		irun += 1;
+		k += 1;
+		code = rle[i][k];
+		k += 1;
+		length = rle[i][k];
+		if(!(0<=code<=426),throw("code"||char(code)));
+		if(!(1<=length<=30000),throw("length"||char(length)));
+		partBlob = partBlob || (if( code <= 127,
+			address += 1;
+			Matrix To Blob( Matrix( code ), "int", 1, "big" ); // big: sign first
+		,
+			address += 2;
+			Matrix To Blob( Matrix( -(code) ), "int", 2, "big" );
+		) || if( length <= 127,
+			address += 1;
+			Matrix To Blob( Matrix( length ), "int", 1, "big" );
+		,
+			address += 2;
+			Matrix To Blob( Matrix( -length ), "int", 2, "big" );
+		));
+	);
+	if(mod(i,100)==0,RleTableDataBlob = RleTableDataBlob || partBlob;	partBlob = Char To Blob( "" ););
+);
+show(length(RleTableDataBlob));// 1,385,104 // 1,519,228 then 1,519,319 
+
+/*
+build the string table. the binary data needs the names or descriptions that go with
+the codes in the rle. There will be a matrix of offsets into a blob of packed strings.
+*/
+StringTableIndex = J( Nitems( iFeatureToName )+1, 1, . );
+null = Hex To Blob( "00" );
+StringTableDataBlob = null; // water. represented by a zero-length null terminated string.
+StringTableIndex[1] = 0; // pointer to water
+/*
+at the very top, a table to convert from name to rule was loaded. make a lookup AA
+and then translate the feature name to the rule and put the rule in the blob.
+You won't care about the Nuuk/Godthab issue, I hope. It shows up here if Nuuk
+is unknown by the gen-tz.py code mentioned earlier as key not found. A kludge
+fix is shown, it might need more. My fix involved putting all the items in
+iFeatureToName into gen-tz.py; that allowed it to lookup the rule in the linux system.
+*/
+xlate=associativearray(dtTrans:from<<getvalues,dtTrans:to<<getvalues); // rename col1=from, col2=to
+// 'America/Nuuk' is 'America/Godthab'
+//if(!xlate<<contains("America/Nuuk"),
+//xlate["America/Nuuk"] = xlate["America/Godthab"];
+//);
+for( i = 1, i <= Nitems( iFeatureToName ), i += 1,
+	StringTableIndex[i+1] = Length( StringTableDataBlob );
+	tznamet=try(xlate[iFeatureToName[i]],"unknown");// "Asia/Qostanay" is new this time
+	StringTableDataBlob = StringTableDataBlob || (chartoblob(tznamet) || null);
+	//show(i,chartoblob(iFeatureToName[i]),length(StringTableDataBlob));
+);
+Length( StringTableDataBlob );//7022
+loc(iFeatureToName,"America/New_York");
+
+/*
+Almost got it all. Need a little header for the blob that describes the rest of the blob.
+the initial picure is wrong, n is bigger and the offsets are wrong. Read the code instead.
+It took a while to understand how to map the flash memory holding this blob into
+the ESP32 address space. It shows up at a huge address. This blob needs to use offsets
+and not try to use pointers, there is no way to relocate them...not 16,000+ of them.
+*/
+//////////////// output BLOB /////////////////
+// HEADER
+// 00000000:        10 4-byte number of table ptrs (string, rle)
+// 00000004:        0C 4-byte ptr to string table
+// 00000008:  nnnnnnnn 4-byte ptr to rle table (need size of StringTableIndex and StringTableDataBlob)
+// STRING TABLE
+// 0000000C:   C+4*427 StringTableIndex 427 4-byte ptrs to string table entries, 4 bytes each
+// 00000010:       ... 2nd string 4-byte ptr
+//  C+4*427:  "a\0b\0" StringTableDataBlob of null term strings
+// RLE TABLE
+// nnnnnnnn:  rrrrrrrr RleTableIndex 4-byte ptr to start of first run
+//      ...:       ... 16,000 4-byte run ptrs 
+// n+64,000:  rle      RleTableDataBlob (1-2 compression from above)
+
+stiLength = 4*nitems(StringTableIndex);// 4-byte offsets, string table's length
+rtiLength = 4*nitems(RleTableIndex); // 4-byte offsets, run table's length
+stdLength = length(StringTableDataBlob);
+n=12;// number of 4-byte integers, not counting the first n value, counting the "END." value
+// first build a matrix of 4-byte integers. some are offsets, some are values.
+// 4+n*4 is the header length, including the initial n value.
+header = n // number of offsets and ints that follow:
+	||((4+n*4)+0) // offset to string index table
+	||((4+n*4)+stiLength) // offset to string data "America/New_York\0" and similar packed strings
+	||((4+n*4)+stiLength+stdLength) // offset to rle index table
+	||((4+n*4)+stiLength+stdLength+rtiLength) // offset to rle data 1 or 2 compressed
+	||((4+n*4)+stiLength+stdLength+rtiLength+length(RleTableDataBlob)) // date. sanity checking. not used for much.
+	||nrows(composition) // lat
+	||ncols(composition) // lon
+	||-90||90 // lat coverage for nrows
+	||-180||180 // lon cover for ncols
+	||hextonumber(hex(reverse("END.")));// little endian reverses again (hextonumber data is big endian)
+if(n!=nitems(header)-1,throw("header"));
+/*
+convert the header matrix to a blob
+*/
+headerBlob = matrixtoblob(header,"int",4,"little");
+hbLength = length(headerBlob);
+
+/*
+Convert the string table index to a blob. NOTE the multiply by 0! these are not
+pointers and not relocated offsets. they are relative offsets within the string table data
+(distinguish between string table INDEX and string table DATA; the first item in the
+INDEX is the offset of the first string in the DATA.)
+*/
+stiBlob = matrixToBlob(StringTableIndex+0*(hbLength+stiLength/*relocate ptrs*/),"int",4,"little");// NOT relocated, index offsets relative to StringTableDataBlob
+if(length(stiBlob)!=stiLength,throw("stiBlob"));
+
+/* ditto the RLE table INDEX and DATA */
+rtiBlob = matrixtoblob(RleTableIndex+0*(hbLength+stiLength+rtiLength/*relocate ptrs*/),"int",4,"little");// NOT relocated,... RleTableDataBlob
+if(length(rtiBlob)!=rtiLength,throw("rtiBlob"));
+
+/* put it together, in order */
+finalblob = headerBlob 
+			|| stiBlob 
+			|| StringTableDataBlob 
+			|| rtiBlob 
+			|| RleTableDataBlob 
+			|| chartoblob("TZ lookup built "||char(asdate(today()))) || null;
+
+write("\!nfinalblob size=",length(finalblob));// pass1=1590571, pass2=1590932
+
+// a little testing, not much 
+write(
+	"\!nstring NY=",
+	blobpeek(finalblob,
+		blobtomatrix( 
+			Blob Peek( finalblob, 
+				Blob To Matrix( Blob Peek( finalblob, 1/*string index*/ * 4, 4 ), "int", 4, "little" )[1]/*offset to index*/ + 4 * 152/*offset in index to offset of NY in string data*/
+				, 4 
+			),
+			"int",4,"little"
+		)
+		+
+		Blob To Matrix( Blob Peek( finalblob, 2/*data*/ * 4, 4 ), "int", 4, "little" )[1]/*offset to start of string data*/
+		,
+		17
+	)
+);
+
+// a little testing, not much 
+write("\!nsignature=",
+	blobpeek(
+		finalblob,
+		Blob To Matrix( Blob Peek( finalblob, 5 * 4, 4 ), "int", 4, "little" )[1],
+		300
+	)
+);
+
+//
+//************ save the binary data to flash on the ESP32 *************
+//
+savetextfile("f:/ClockScripts/tzblob.bin", finalblob);
+
+/*
+this code is translated to C on the ESP32, this is a more friendly environment for prototyping...
+*/
+
+// quick test
+lookup = function({lat=41.91,lon},{row,col,r,c,code},
+	row=floor(interpolate(lat,-90,N Rows( composition ),90,1+0))-0;
+	r=RleTableIndex[row];
+	col=round(interpolate(lon,-180,1+0,180,N Cols( composition )))-0;
+	c=0;
+	while(c<col,
+		code = blobtomatrix(blobpeek(RleTableDataBlob,r,1),"int",1,"big")[1];
+		if(code<0,
+			code = -blobtomatrix(blobpeek(RleTableDataBlob,r,2),"int",2,"big")[1];
+			r+=2;//
+		,//
+			r+=1;
+		);
+		length = blobtomatrix(blobpeek(RleTableDataBlob,r,1),"int",1,"big")[1];
+		if(length<0,
+			length = -blobtomatrix(blobpeek(RleTableDataBlob,r,2),"int",2,"big")[1];
+			r+=2;//
+		,//
+			r+=1;
+		);
+		c += length;
+	);
+	if(code>0,
+		iFeatureToName[code];
+	,//
+		"water"
+	)
+);
+
+/*
+draw a bunch of markers, color coded for timezone, over a map.
+This give a view of the accuracy near rivers and obvious political boundaries.
+*/
+//////////////////////////////////////////////////////////////////
+markersOver = function({clat,clon,name,grid=1},
+	dtVat=New Table( name,
+		New Column( "tz", Character, "Nominal" ),
+		New Column( "lat", Numeric, "Continuous", Format( "Best", 12 ) ),
+		New Column( "lon", Numeric, "Continuous", Format( "Best", 12 ) )
+	);
+
+	for(ylat=clat-.5*grid, ylat<=clat+.5*grid,ylat+=.004*grid,
+		for(xlon=clon-.5*grid,xlon<=clon+.5*grid,xlon+=.006*grid,
+			dtVat<<addrows(1);
+			dtVat:tz=lookup(ylat,xlon);
+			dtVat:lat=ylat;
+			dtVat:lon=xlon;
+		)
+	);
+	dtVat:tz<<label(1);
+	dtVat<< Color or Mark by Column(dtVat:tz);
+	dtVat<<setdirty(0);
+	dtVat = Graph Builder(
+		Size( 1843, 976 ),
+		Show Control Panel( 0 ),
+		Variables( X( :lon ), Y( :lat ) ),
+		Elements( Points( X, Y, Legend( 3 ) ) ),
+		SendToReport(
+//			Dispatch(
+//				{},
+//				"lon",
+//				ScaleBox,
+//				{Min( 12.4031559352746 ), Max( 12.5218440647255 ), Inc( 0.01 ),
+//				Minor Ticks( 1 )}
+//			),
+//			Dispatch(
+//				{},
+//				"lat",
+//				ScaleBox,
+//				{Scale( "Geodesic" ), Format( "Best", 12 ), Min( 41.8801686871589 ),
+//				Max( 41.9397483777795 ), Inc( 0.01 ), Minor Ticks( 4 )}
+//			),
+			Dispatch(
+				{},
+				"Graph Builder",
+				FrameBox,
+				//{Background Map( Images( "Street Map Service" ) ), Marker Size( 6 )}
+				{Background Map(
+					Images(
+						"Web Map Service", "https://ows.terrestris.de/osm-gray/service?",
+						"OSM-WMS"
+					)
+				), Marker Size( 1 ), Marker Drawing Mode( "Normal" )}
+			)
+		)
+	);
+);
+/*
+the smallest timezone *does* align part way under the data. The pixels in the data are bigger than 
+this timezone and it falls on the edge of a pixel.
+Kansas is interesting because of its western counties.
+*/
+markersover(41.905,12.445,"vatican city");
+///////////////////////////////////////
+
+markersover(38.76012940186213, -85.07358907248562, "America/Indiana/Vevay") ;
+markersover(38, -85, "Kentucky",20) ;
+
+markersover(4, -51.5,"French Guiana/Brazil");
+
+markersover(26.528054926367076, 88.5814945236749,"Bangladesh");
+
+markersover(19.413200799245335, 166.6283736471554,"wake island");
+
+markersover(18.925476569622884, -71.7749456680967, "Haiti");
+
+markersover(-54.7, -68.79215603902576, "Tierra del Fuego");
+
+markersover(81.3, 62.4,"Rudolf Island");
+
+markersover(65.84924591016264, -169,"alaska");
+
+markersover(6.297049492023935, 1.7798964984249592,"origin");
+
+markersover(35, -78,"home",100);
+markersover(38.5, -101.5,"kansas",5);
+

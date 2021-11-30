@@ -1,0 +1,45 @@
+* { margin: 0; padding: 0; overflow: hidden; 
+    height: 100%; width: 100%;
+    border: 0; outline: 0; border-spacing: 0;
+    -webkit-box-sizing: border-box; /* Safari/Chrome, other WebKit */
+    -moz-box-sizing: border-box;    /* Firefox, other Gecko */
+    box-sizing: border-box;         /* Opera/IE 8+ */
+}
+table, table tr, table td { }
+
+.btn2 {
+    background-color:#3d94f6;
+    -webkit-border-top-left-radius:8px;
+    -moz-border-radius-topleft:8px;
+    border-top-left-radius:8px;
+    -webkit-border-top-right-radius:8px;
+    -moz-border-radius-topright:8px;
+    border-top-right-radius:8px;
+    -webkit-border-bottom-right-radius:8px;
+    -moz-border-radius-bottomright:8px;
+    border-bottom-right-radius:8px;
+    -webkit-border-bottom-left-radius:8px;
+    -moz-border-radius-bottomleft:8px;
+    border-bottom-left-radius:8px;
+    text-indent:0px;
+    display:inline-block;
+    color:#ffffff;
+    font-family:sans serif;
+    font-size:10px;
+    font-weight:normal;
+    font-style:normal;
+    height:20px;
+    line-height:20px;
+    width:80%;
+    text-decoration:none;
+    text-align:center;
+    padding: 0px 0px;
+}
+.btn2:hover {
+    background-color:#1e62d0;
+}
+.btn2:active {
+  /*  position:relative;
+    top:2px; left:2px mouse miss on edge */
+    background-color:#0e3270;
+}

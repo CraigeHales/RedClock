@@ -1,0 +1,104 @@
+USE IDF 4.3 
+
+The https is not hard to turn on, but runs very slow...pages take a second longer to load. You'd need to replace the placeholder files in certs and find #define USE_HTTPS 0 in clockMain.h...
+
+here are some rough notes on the config file setup (menuconfig)
+
+serial flasher config needs to be 4M (critical, too much for 2M)
+lwip config task afinity 0 (maybe not important now?)
+componet config->lwip-> RedClock not espressif for host name. How to serialize?
+
+componentconfig->esp32 specific-> 240 mHz
+**** use 160 **** thats what it was built for and there may be some timing issues
+
+component config->SPI Flash driver->writeing to dangerous -> ALLOWED
+
+component config -> esp32 httpS server -> enable (testing)
+
+->HTTPD_MAX_REQ_HDR_LEN == 1024
+
+in the certs directory: openssl req -newkey rsa:4096 -nodes -keyout prvtkey.pem -x509 -days 36500 -out cacert.pem -subj "/CN=Red Clock Factory"
+
+bootloader->enable app rollback (but NOT the anti-rollback)
+
+blink port 2, not 5 (this is from the dawn of time, ignore...)
+ 
+this file balances the storage between the program, the file system, and the tzdata.
+currently there is extra space in the file system that could be used...
+partition partitions_timezone.csv
+
+
+the config sequence (1st day development, usually not needed, avoid if not needed):
+cd ~/esp/RedClock/
+. ~/esp/esp-idf/export.sh
+idf.py set-target esp32
+idf.py menuconfig
+
+
+the build sequence (day-to-day development):
+cd ~/esp/RedClock/
+. ~/esp/esp-idf/export.sh
+clear;idf.py -p /dev/ttyUSB0 flash monitor
+
+use this for final build:
+clear;idf.py -p /dev/ttyUSB0 clean flash monitor
+which takes longer but gets the date stamp right.
+
+
+after flashing use this to put the timezone data in the tzmap partition:
+**** use this ****
+parttool.py write_partition --partition-name=tzmap --input="/home/c/esp/RedClock/tzblob.bin"
+**** end ****
+(previously used 
+esptool.py write_flash 0x00110000 ~/esp/RedClock/tzblob.bin
+which has the offset (.csv file info) hard coded)
+
+(main/CMakelist has the magic to put the spiffs files into rom. upload.html is different.)
+
+OTA updates use Executable_Update.Bin and Timezone_Update.Bin (caps important) as special destinations.
+Batch OTA uses 
+python pushall.py ### edit this file to fix the network address
+to upload exe, tz, and spifs data to ALL FINDABLE NODES.
+
+see https://community.jmp.com/t5/Uncharted/JSL-BLOB-in-an-ESP32-Clock/ba-p/349164 for
+info on how the timezone data was created. You'll have a hard time recreating it without
+JMP and a fair amount of JSL understanding. But it could be re-done with python, and
+perhaps made better too. I *do* expect the timezone info to change over time; 
+daylight savings time rules and boundaries are all locally determined. (Remaking it
+is about making a *huge* bitmap of polygons, not anti-aliased, colored by zone. 
+Then processing the pixels as data into a run-length-encode representation.)
+
+
+the GPS connects on USB as ACM0 (not USB0) and the usb port shows
+$GPRMC,,V,,,,,,,,,,N*53
+$GPVTG,,,,,,,,,N*30
+$GPGGA,,,,,,0,00,99.99,,,,,,*48
+$GPGSA,A,1,,,,,,,,,,,,,99.99,99.99,99.99*30
+$GPGLL,,,,,,V,N*64
+$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50
+$GPTXT,01,01,02,HW  UBX-G70xx   00070000 *77
+$GPTXT,01,01,02,ROM CORE 1.00 (59842) Jun 27 2012 17:43:52*59
+$GPTXT,01,01,02,PROTVER 14.00*1E
+$GPTXT,01,01,02,ANTSUPERV=AC SD PDoS SR*20
+$GPTXT,01,01,02,ANTSTATUS=OK*3B
+$GPTXT,01,01,02,LLC FFFFFFFF-FFFFFFFD-FFFFFFFF-FFFFFFFF-FFFFFFF9*53
+when initialized. The project does not use the usb on the gps. Test via usb with
+clear;idf.py -p /dev/ttyACM0  monitor
+
+
+
+upgrading the dev system (from /home/c/esp/) -- backup first!
+I'm sure there is some git pull to do it, but it seems to work well to delete the old dirs and recreate:
+git clone --recursive https://github.com/espressif/esp-idf.git
+git clone --recursive https://github.com/espressif/esp-iot-solution.git
+/home/c/esp/esp-idf/install.sh
+
+It is a pain; between 4.2 and 4.4 the bme signature in iot changed, a lot! If there is no reason, maybe don't. 
+I'd rather hoped I might be able to use a cell phone on the esp's AP, but nope...
+
+MAYBE NOT. I *think* the above gets a very recent, perhaps unstable version. Instead, maybe try this
+https://dl.espressif.com/dl/esp-idf/releases/esp-idf-v4.3.zip
+from a page like https://github.com/espressif/esp-idf/releases/tag/v4.3
+which seems to be a current release, and reproducible via the zip file of 623 MB
+
+>>> use the 4.3 release <<<

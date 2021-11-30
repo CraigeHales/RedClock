@@ -1,0 +1,36 @@
+https://github.com/espressif/esp-idf/releases/tag/v4.3.1 is the version to use (compiler).
+"git clone -b v4.3.1 --recursive https://github.com/espressif/esp-idf.git esp-idf-v4.3.1
+cd esp-idf-v4.3.1" (rename it esp-idf)
+there is an easy zipped download at https://dl.espressif.com/dl/esp-idf/releases/esp-idf-v4.3.1.zip or
+https://github.com/espressif/esp-idf/releases/download/v4.3.1/esp-idf-v4.3.1.zip
+
+cd ~/Documents/GitHub/RedClock/esp/RedClock/
+cd ../esp-idf
+./install.sh
+cd ~/Documents/GitHub/RedClock/esp/RedClock/
+. ./export.sh
+idf.py menuconfig
+clear;idf.py -p /dev/ttyUSB0 clean size
+# 2x warning msg: esp-idf/components/spi_flash/flash_ops.c:264,574:36: warning: unused variable 'guard'
+ls -haltr build/RedClock*
+-rw-rw-r-- 1 c c 7.1M Oct 19 22:16 build/RedClock.map
+-rwxrwxr-x 1 c c  11M Oct 19 22:16 build/RedClock.elf
+-rw-rw-r-- 1 c c 963K Oct 19 22:16 build/RedClock.bin <<< good!
+
+
+also, you'll need a few bits from https://github.com/espressif/esp-iot-solution (bme driver?)
+put it in esp_iot_solution.
+"https://github.com/espressif/esp-iot-solution.git" hope for the best. maybe try for one that matches 4.3.1?
+"87e76fd295f4d971fc7ea9ab451283bcc3ba7ac3" is my test fetch
+and this is one I'd been using:
+git show e4672a5208f97a0e77b4c91568b7fa46e7a73ab5
+commit e4672a5208f97a0e77b4c91568b7fa46e7a73ab5
+Merge: bd0702d 34591c4
+Author: Li Qing Qiao <liqingqiao@espressif.com>
+Date:   Fri Jun 11 11:10:07 2021 +0000
+    Merge branch 'bugfix/led_blink_switch_issue' into 'master'
+    bugfix(led_indicator): fix led blink switch bug    
+    See merge request rd/esp-iot-solution!511
+    
+    
+
