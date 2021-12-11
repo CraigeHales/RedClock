@@ -102,6 +102,8 @@ Watch the RedClock adjust from Daylight to Standard time...
 </div>
 
 ## License
-Code I wrote is BSD license, see license file. There is some Apache license code in the IOT directory. Some code came from StackOverflow which might be MIT license and is identified with a URL. https://meta.stackexchange.com/questions/271080/the-mit-license-clarity-on-using-code-on-stack-overflow-and-stack-exchange
+Code I wrote is BSD license, see license file.
+There is some Apache license code in the IOT directory.
+Some code came from StackOverflow. *I do not know the licensing status of that code.*
 https://docs.espressif.com/projects/esp-idf/en/latest/esp32/COPYRIGHT.html describes many licenses that might apply to code that might be mixed in here as well.
 
